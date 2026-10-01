@@ -5,6 +5,7 @@
 #include "native_world_queue.h"
 #include "native_world_composite.h"
 #include "scene_aa.h"
+#include "scope_zoom.h"
 #include <Windows.h>
 #include <intrin.h>
 #pragma warning(push)
@@ -6266,6 +6267,20 @@ bool DrawFencerStereo(void* model,void* renderContext,int pass,void* view) {
     }
     return true;
 }
+bool ModelHasSVU01Scope(void* model) noexcept {
+    // The registry points at a loaded resource object, not at MDB0 bytes.
+    // Its +0x78 name is the actual MDB model selected for this draw.
+    __try {
+        const auto registry=static_cast<const unsigned char*>(model)+0xA0;
+        if(!edf6vr::Readable(registry,8)) return false;
+        const auto* resource=*reinterpret_cast<const unsigned char* const*>(registry);
+        if(!edf6vr::Readable(resource,0x80)) return false;
+        const auto* name=*reinterpret_cast<const wchar_t* const*>(resource+0x78);
+        constexpr wchar_t expected[]=L"s_sniper_SVU01";
+        return edf6vr::Readable(name,sizeof(expected)) &&
+            std::memcmp(name,expected,sizeof(expected))==0;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
 bool DrawHeldWeapon(void* model,void* renderContext,int pass,void* view) {
     WeaponHoldCommand command{};
     AcquireSRWLockShared(&g_lock);
@@ -6344,6 +6359,16 @@ bool DrawHeldWeapon(void* model,void* renderContext,int pass,void* view) {
                         PublishMuzzleFrame(command.weapon,command.soldier,command.objectId,muzzle,command.rootWorld,command.refreshed,
                                            command.fencer?command.handIndex:1u);
                     PublishCasingFrame(command,&arm,&wanted[0]);
+                    if((pass==0 || pass==1) && ModelHasSVU01Scope(model)) {
+                        const int scopeEye=edf6vr::NativeWorldRenderEye();
+                        const auto scopeFrame=edf6vr::NativeWorldRenderFrame();
+                        static std::atomic<ULONGLONG> nextScopeLog{0};
+                        const auto now=GetTickCount64();
+                        auto next=nextScopeLog.load(std::memory_order_relaxed);
+                        if(now>=next && nextScopeLog.compare_exchange_strong(next,now+5000))
+                            Log("SCOPEMODEL SVU01 eye=%d frame=%llu pass=%d",scopeEye,scopeFrame,pass);
+                        if(scopeEye==0) edf6vr::PublishScopeZoom(wanted[0],scopeFrame);
+                    }
                 }
                 if(prepared) for(std::size_t b=0;b<paletteCount;++b) {
                     touched=static_cast<unsigned>(b)+1; // partial writes are restored too

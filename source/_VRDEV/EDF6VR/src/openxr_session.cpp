@@ -1,6 +1,7 @@
 #include "motion_trace.h"
 #include "render_pose.h"
 #include "scene_aa.h"
+#include "scope_zoom.h"
 #include "openxr_session.h"
 #include "native_crosshair.h"
 #include "aim_hud.h"
@@ -1303,6 +1304,8 @@ void DestroyDisplaySwapchain() noexcept {
     ReleaseWarp();
     ReleaseDesktopMirror();
     ReleaseSceneAA();
+    ReleaseScopeZoom();
+    ClearScopeZoom();
     ResetEyeCheck();
     if(g_swapchain!=XR_NULL_HANDLE && g_api.destroySwapchain) g_api.destroySwapchain(g_swapchain);
     g_swapchain=XR_NULL_HANDLE;
@@ -2005,7 +2008,9 @@ bool BuildOtherEye(int drawnEye,PerfBatch& perf,float steps,bool antiAlias) noex
     return ok;
 }
 
-bool CopyNativeRightEye(ID3D11Texture2D* image,PerfBatch& perf,bool antiAlias) noexcept {
+bool CopyNativeRightEye(ID3D11Texture2D* image,PerfBatch& perf,bool antiAlias,
+                        const Matrix& view,const Matrix& projection,
+                        const ScopeZoomPose* scope) noexcept {
     uint32_t index=0;
     XrSwapchainImageAcquireInfo take{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     if(!image || XR_FAILED(g_api.acquireImage(g_swapchainRight,&take,&index))) return false;
@@ -2014,6 +2019,7 @@ bool CopyNativeRightEye(ID3D11Texture2D* image,PerfBatch& perf,bool antiAlias) n
         CopyIntoSwapchain(image,1,index,g_imagesRight,g_imageCountRight,perf);
     if(ok) {
         CompositeWeaponStereo(g_context,g_imagesRight[index],1);
+        if(scope) CompositeScopeZoom(g_context,image,g_imagesRight[index],view,projection,*scope);
         ApplySceneAA(g_context,g_imagesRight[index],antiAlias);
         CompositeWorldUi(g_imagesRight[index]);
         if(g_desktopMirror.load()) SnapshotMirror(g_context,g_imagesRight[index],MirrorImage::Right,
@@ -2297,6 +2303,8 @@ void RunDisplayFrame(ID3D11Texture2D* backBuffer,unsigned width,unsigned height,
     // An allocation failure must not turn it into legacy mono projection.
     if(NativeWorldEnabled() && mode!=XrDisplayMode::Quad && !stereo) mode=XrDisplayMode::Quad;
     const bool native=stereo && nativeImages.ready;
+    ScopeZoomPose scopePose{};
+    const bool scopeReady=native && ReadScopeZoom(nativeImages.frame,scopePose);
     // Do the two native pictures really differ, the right way round? (eye_check.h)
     if(native && displayReady) EyeCheckFrame(g_context,nativeImages.eye[0].Get(),nativeImages.eye[1].Get(),g_log);
     XrSwapchain target=(stereo && eye==1)?g_swapchainRight:g_swapchain;
@@ -2344,10 +2352,13 @@ void RunDisplayFrame(ID3D11Texture2D* backBuffer,unsigned width,unsigned height,
                 if(eye==g_lastCopiedEye) g_eyeRepeats.fetch_add(1,std::memory_order_relaxed);
                 g_lastCopiedEye=eye;
                 g_eyeConsumed.store(true,std::memory_order_release);
-                if(native) warped=CopyNativeRightEye(nativeImages.eye[1].Get(),perf,antiAlias);
+                if(native) warped=CopyNativeRightEye(nativeImages.eye[1].Get(),perf,antiAlias,
+                    nativeImages.view[1],nativeImages.projection[1],scopeReady?&scopePose:nullptr);
                 else if(g_warpEnabled.load(std::memory_order_relaxed) && g_resolved)
                     warped=BuildOtherEye(eye,perf,effectiveSteps,antiAlias);
                 CompositeWeaponStereo(g_context,targetImages[index],static_cast<unsigned>(eye));
+                if(native && scopeReady) CompositeScopeZoom(g_context,nativeImages.eye[0].Get(),targetImages[index],
+                    nativeImages.view[0],nativeImages.projection[0],scopePose);
             }
             if(copied) ApplySceneAA(g_context,targetImages[index],antiAlias);
             if(copied && mode!=XrDisplayMode::Quad) CompositeWorldUi(targetImages[index]);
@@ -2359,6 +2370,8 @@ void RunDisplayFrame(ID3D11Texture2D* backBuffer,unsigned width,unsigned height,
             static ULONGLONG aaReport=0;
             const auto aaNow=GetTickCount64();
             if(g_log && aaNow-aaReport>=5000) { aaReport=aaNow;g_log(SceneAAStatus()); }
+            static ULONGLONG scopeReport=0;
+            if(native && g_log && aaNow-scopeReport>=5000) {scopeReport=aaNow;g_log(ScopeZoomStatus());}
             // Snapshot before release; the runtime owns the image afterwards.
             // Only keep left when needed as the same fallback submitted to right.
             if(copied && g_desktopMirror.load() && mode!=XrDisplayMode::Quad
