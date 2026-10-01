@@ -1,6 +1,5 @@
 #include "scope_zoom.h"
 #include <wrl/client.h>
-#include <algorithm>
 #include <vector>
 #include <cstdio>
 
@@ -14,7 +13,8 @@ int main() {
     std::vector<unsigned char> pixels(side*side*4,0);
     for(unsigned y=0;y<side;++y) for(unsigned x=0;x<side;++x) {
         const auto i=(y*side+x)*4;
-        pixels[i]=static_cast<unsigned char>(x);pixels[i+3]=255;
+        pixels[i]=static_cast<unsigned char>(x);
+        pixels[i+1]=static_cast<unsigned char>(y);pixels[i+3]=255;
     }
     D3D11_TEXTURE2D_DESC desc{};desc.Width=desc.Height=side;desc.MipLevels=desc.ArraySize=1;
     desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
@@ -22,8 +22,8 @@ int main() {
     D3D11_SUBRESOURCE_DATA init{};init.pSysMem=pixels.data();init.SysMemPitch=side*4;
     ComPtr<ID3D11Texture2D> world,target,readback;
     if(FAILED(device->CreateTexture2D(&desc,&init,&world))) return 3;
-    std::fill(pixels.begin(),pixels.end(),static_cast<unsigned char>(0));
-    init.pSysMem=pixels.data();
+    // The compositor receives a normal world image before the lens overlay.
+    // Keep that image here to check preservation of its existing outer pixels.
     if(FAILED(device->CreateTexture2D(&desc,&init,&target))) return 4;
     desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
     if(FAILED(device->CreateTexture2D(&desc,nullptr,&readback))) return 5;
@@ -36,14 +36,35 @@ int main() {
     context->CopyResource(readback.Get(),target.Get());
     D3D11_MAPPED_SUBRESOURCE map{};
     if(FAILED(context->Map(readback.Get(),0,D3D11_MAP_READ,0,&map))) return 7;
-    const auto sample=[&](unsigned x) {return static_cast<unsigned char*>(map.pData)[128*map.RowPitch+x*4];};
-    const unsigned middle=sample(128),inside=sample(133),outside=sample(160);
+    struct Sample {unsigned x,y,red,green;};
+    // Sampling at half the displacement from the center gives these values
+    // (within one byte for interpolation). In particular, 1x gives red=120
+    // at (120,128), which cannot pass the expected 124 +/- 1 check.
+    constexpr Sample samples[]={
+        {128,128,128,128},
+        {120,128,124,128},{135,128,131,128},
+        {128,120,128,124},{128,135,128,131},
+        // Outside the aperture, the original red/green gradient must remain.
+        {160,128,160,128},{128,160,128,160},{120,120,120,120},
+        {0,0,0,0},{255,255,255,255}
+    };
+    const auto withinByte=[](unsigned actual,unsigned expected) {
+        return actual+1>=expected && actual<=expected+1;
+    };
+    unsigned failures=0;
+    for(const auto& sample:samples) {
+        const auto* pixel=static_cast<const unsigned char*>(map.pData)
+            +sample.y*map.RowPitch+sample.x*4;
+        if(!withinByte(pixel[0],sample.red) || !withinByte(pixel[1],sample.green)
+           || pixel[2]!=0 || pixel[3]!=255) {
+            std::printf("scope (%u,%u): rgba=%u,%u,%u,%u expected=%u,%u,0,255\n",
+                sample.x,sample.y,unsigned(pixel[0]),unsigned(pixel[1]),
+                unsigned(pixel[2]),unsigned(pixel[3]),sample.red,sample.green);
+            ++failures;
+        }
+    }
     context->Unmap(readback.Get(),0);
     edf6vr::ReleaseScopeZoom();
-    if(middle<126 || middle>130 || inside<129 || inside>133 || outside!=0) {
-        std::printf("scope sample middle=%u inside=%u outside=%u\n",middle,inside,outside);
-        return 8;
-    }
-    std::puts("scope 2x inside, unchanged outside");
-    return 0;
+    std::printf("scope 2x sampling (both axes), unchanged outside: %u failures\n",failures);
+    return failures?8:0;
 }
