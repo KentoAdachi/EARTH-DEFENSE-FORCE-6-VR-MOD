@@ -1,5 +1,9 @@
 # Experimental SVU01 scope reference (DNM)
 
+**Upstream status (2026-10-01):** EDF6VR 3.0.0/3.0.1 now includes scope modes.
+This is a historical 2.1.8 reference, not a merge-ready change for 3.0.1.
+See [the upstream comparison and current proposal status](upstream_scope_status.md).
+
 This is a reference implementation for discussing see-through sniper scopes in
 VR. It is not ready to merge or include in a release. The zoom compositor matches
 the `s_sniper_SVU01` model; in-game lens transparency was checked with the
