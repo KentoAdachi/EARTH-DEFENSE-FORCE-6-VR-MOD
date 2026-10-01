@@ -27,6 +27,7 @@ this reference DLL and its three relevant tests, open **cmd.exe**, change to
 
 ```bat
 call tools\toolchain\msvc-x64-env.cmd
+set VSLANG=1033
 python tools\prepare_native_cockpit_materials.py
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build --target EDF6VR EDF6VRScopeZoomTests EDF6VRDisplayTests EDF6VRWeaponStereoTests
@@ -35,10 +36,23 @@ cmake --build build --target EDF6VR EDF6VRScopeZoomTests EDF6VRDisplayTests EDF6
 Run these commands in the same cmd.exe session: calling the environment batch
 file from PowerShell does not initialize the parent PowerShell environment.
 CMake and Ninja must be available on PATH, as required by `source/BUILD.md`.
-If using Python-installed CMake, `python -m cmake` can replace `cmake`; Ninja
-must still be discoverable (or supplied with `-DCMAKE_MAKE_PROGRAM`). The DLL
+If CMake or Ninja is absent from PATH, install the Python packages with
+`python -m pip install cmake ninja`, then use this alternative in the same
+cmd.exe session, after the environment and material preparation above:
+
+```bat
+for /f "delims=" %N in ('python -c "import ninja; print(ninja.BIN_DIR)"') do set "EDF6VR_NINJA=%N\ninja.exe"
+python -m cmake -S . -B build-scope-reference -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_MAKE_PROGRAM="%EDF6VR_NINJA%"
+python -m cmake --build build-scope-reference --target EDF6VR EDF6VRScopeZoomTests EDF6VRDisplayTests EDF6VRWeaponStereoTests
+```
+
+The `for` command uses `%N` at an interactive prompt; use `%%N` if saving it
+in a batch file. A new build directory avoids reusing another generator's
+cache. The DLL
 is written to `dist/EDF6VR.dll`, and test executables to `build/`. This target
 selection does not establish that the full build or test suite passes.
+For the Python alternative, the executables are in `build-scope-reference/`;
+substitute that directory in the test commands below.
 
 The lens override can be generated separately:
 
@@ -61,6 +75,12 @@ existed before, remove the generated override. The original `Root.cpk` stays
 unchanged. An updater can overwrite the experimental DLL.
 
 ## Validation and open questions
+
+On 2026-10-01, a new `build-scope-reference` directory was configured using
+the Python CMake/Ninja alternative above (VS 2022 x64, RelWithDebInfo).
+The DLL and all three selected test targets built successfully. Scope zoom,
+display (19 projections), and weapon stereo tests each reported zero failures;
+the weapon stereo test was given the installed build 17055427 `EDF.dll`.
 
 Lens transparency has been confirmed in-game, and the logging counters confirm
 that the composite pass executes. The visible scale and aperture alignment
