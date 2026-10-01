@@ -104,9 +104,11 @@ still need verification; the counters alone do not establish that the intended
 2x view is correctly displayed in the headset.
 
 `EDF6VRScopeZoomTests` uses a D3D WARP red/green gradient image to check the
-inner 2x sampling scale in both axes and preservation of existing pixels
-outside the aperture. Its sample locations and tolerances distinguish 2x from
-1x; a verification copy with the shader changed to 1x must fail. The test uses
+inner 2x sampling scale in both axes, at centered and shifted apertures, and
+exact preservation of sampled pixels outside the aperture. Only the inner
+filtered samples allow a one-byte tolerance. A verification copy with the
+shader changed to 1x failed at eight samples. A copy sampling around a fixed
+image center failed at five samples in the shifted case. The test uses
 UNORM images and does not test the actual weapon pose, binocular alignment,
 color-space combinations, or performance. Relevant test commands are:
 

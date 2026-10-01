@@ -29,42 +29,60 @@ int main() {
     if(FAILED(device->CreateTexture2D(&desc,nullptr,&readback))) return 5;
     edf6vr::Matrix view{{{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,0,1}}};
     edf6vr::Matrix projection{{{1,0,0,0},{0,1,0,0},{0,0,1,-1},{0,0,0,0}}};
-    edf6vr::ScopeZoomPose scope{};scope.frame=1;
-    scope.center[2]=scope.right[2]=scope.up[2]=.2f;
-    scope.right[0]=.014f;scope.up[1]=.014f;
-    if(!edf6vr::CompositeScopeZoom(context.Get(),world.Get(),target.Get(),view,projection,scope)) return 6;
-    context->CopyResource(readback.Get(),target.Get());
-    D3D11_MAPPED_SUBRESOURCE map{};
-    if(FAILED(context->Map(readback.Get(),0,D3D11_MAP_READ,0,&map))) return 7;
-    struct Sample {unsigned x,y,red,green;};
+    struct Sample {unsigned x,y,red,green,tolerance=1;};
     // Sampling at half the displacement from the center gives these values
     // (within one byte for interpolation). In particular, 1x gives red=120
     // at (120,128), which cannot pass the expected 124 +/- 1 check.
-    constexpr Sample samples[]={
+    constexpr Sample centered[]={
         {128,128,128,128},
         {120,128,124,128},{135,128,131,128},
         {128,120,128,124},{128,135,128,131},
         // Outside the aperture, the original red/green gradient must remain.
-        {160,128,160,128},{128,160,128,160},{120,120,120,120},
-        {0,0,0,0},{255,255,255,255}
+        {160,128,160,128,0},{128,160,128,160,0},{120,120,120,120,0},
+        {0,0,0,0,0},{255,255,255,255,0}
     };
-    const auto withinByte=[](unsigned actual,unsigned expected) {
-        return actual+1>=expected && actual<=expected+1;
+    // A second aperture projects to (108,138). This catches sampling or
+    // clipping that accidentally assumes the lens is at the image center.
+    constexpr Sample shifted[]={
+        {108,138,108,138},
+        {100,138,104,138},{115,138,111,138},
+        {108,130,108,134},{108,145,108,141},
+        {140,138,140,138,0},{108,170,108,170,0},{100,130,100,130,0},
+        {0,0,0,0,0},{255,255,255,255,0}
+    };
+    struct Case {float x,y;const Sample* samples;};
+    static_assert(sizeof(centered)==sizeof(shifted));
+    const Case cases[]={{0,0,centered},{.03125f,-.015625f,shifted}};
+    const auto within=[](unsigned actual,unsigned expected,unsigned tolerance) {
+        return actual+tolerance>=expected && actual<=expected+tolerance;
     };
     unsigned failures=0;
-    for(const auto& sample:samples) {
-        const auto* pixel=static_cast<const unsigned char*>(map.pData)
-            +sample.y*map.RowPitch+sample.x*4;
-        if(!withinByte(pixel[0],sample.red) || !withinByte(pixel[1],sample.green)
-           || pixel[2]!=0 || pixel[3]!=255) {
-            std::printf("scope (%u,%u): rgba=%u,%u,%u,%u expected=%u,%u,0,255\n",
-                sample.x,sample.y,unsigned(pixel[0]),unsigned(pixel[1]),
-                unsigned(pixel[2]),unsigned(pixel[3]),sample.red,sample.green);
-            ++failures;
+    for(const auto& test:cases) {
+        edf6vr::ScopeZoomPose scope{};scope.frame=1;
+        scope.center[2]=scope.right[2]=scope.up[2]=.2f;
+        scope.center[0]=scope.up[0]=test.x;scope.right[0]=test.x+.014f;
+        scope.center[1]=scope.right[1]=test.y;scope.up[1]=test.y+.014f;
+        context->CopyResource(target.Get(),world.Get());
+        if(!edf6vr::CompositeScopeZoom(context.Get(),world.Get(),target.Get(),view,projection,scope)) return 6;
+        context->CopyResource(readback.Get(),target.Get());
+        D3D11_MAPPED_SUBRESOURCE map{};
+        if(FAILED(context->Map(readback.Get(),0,D3D11_MAP_READ,0,&map))) return 7;
+        for(unsigned i=0;i<sizeof(centered)/sizeof(centered[0]);++i) {
+            const auto& sample=test.samples[i];
+            const auto* pixel=static_cast<const unsigned char*>(map.pData)
+                +sample.y*map.RowPitch+sample.x*4;
+            if(!within(pixel[0],sample.red,sample.tolerance)
+               || !within(pixel[1],sample.green,sample.tolerance)
+               || pixel[2]!=0 || pixel[3]!=255) {
+                std::printf("scope (%u,%u): rgba=%u,%u,%u,%u expected=%u,%u,0,255\n",
+                    sample.x,sample.y,unsigned(pixel[0]),unsigned(pixel[1]),
+                    unsigned(pixel[2]),unsigned(pixel[3]),sample.red,sample.green);
+                ++failures;
+            }
         }
+        context->Unmap(readback.Get(),0);
     }
-    context->Unmap(readback.Get(),0);
     edf6vr::ReleaseScopeZoom();
-    std::printf("scope 2x sampling (both axes), unchanged outside: %u failures\n",failures);
+    std::printf("scope 2x sampling (both axes, centered/shifted), exact outside: %u failures\n",failures);
     return failures?8:0;
 }
