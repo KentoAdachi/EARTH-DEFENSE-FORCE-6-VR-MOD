@@ -1,10 +1,17 @@
 # Experimental SVU01 scope reference (DNM)
 
 This is a reference implementation for discussing see-through sniper scopes in
-VR. It is not ready to merge or include in a release. The prototype targets the
-Ranger's ターミガンHA1 (`s_sniper_SVU01`) only. For an eventual mod feature, the
+VR. It is not ready to merge or include in a release. The zoom compositor matches
+the `s_sniper_SVU01` model; in-game lens transparency was checked with the
+Ranger's ターミガンHA1. Other definitions sharing this model remain untested.
+For an eventual mod feature, the
 request is to investigate applicability to each weapon in the Ranger sniper
 rifle category.
+
+An optional, geometry-only MMF01 (KFF-family) profile is included in the lens
+patch tool. It has not been tried in-game and is not recognized by the zoom
+compositor. See [the model inventory and additional example](sniper_scope_inventory.md)
+for the inspected weapon/model mappings and its verification limits.
 
 ## Rendering approach
 
@@ -15,6 +22,13 @@ the shader samples the existing world image at half the displacement from the
 ellipse center, giving an intended 2x screen-space enlargement. The operation
 runs after the stereo weapon composite and before the world UI. It uses the
 existing eye images and does not render the scene again.
+
+The current composite requires separate source/target textures of matching
+dimensions, one sample, and one array slice. It skips apertures with a
+degenerate projection, a radius below three pixels, or a projected horizontal
+or vertical radius above one quarter of the image dimension. Thus bringing
+the eye very close can disable the overlay. These guards are prototype
+limits, not an optical eye-relief implementation.
 
 ## Build and try locally
 
@@ -81,6 +95,8 @@ the Python CMake/Ninja alternative above (VS 2022 x64, RelWithDebInfo).
 The DLL and all three selected test targets built successfully. Scope zoom,
 display (19 projections), and weapon stereo tests each reported zero failures;
 the weapon stereo test was given the installed build 17055427 `EDF.dll`.
+The checked tool versions were Python 3.11.9, CMake 4.4.3, and Ninja
+`1.13.2.git.kitware.jobserver-pipe-1`, with MSVC 19.37.32824.0.
 
 Lens transparency has been confirmed in-game, and the logging counters confirm
 that the composite pass executes. The visible scale and aperture alignment
@@ -100,6 +116,39 @@ color-space combinations, or performance. Relevant test commands are:
 .\build\EDF6VRWeaponStereoTests.exe ..\..\EDF.dll
 ```
 
+The installed-data lens patch checks are separate from the C++ tests:
+
+```powershell
+python tests\lens_patch_tests.py "<game directory>"
+```
+
+They require the original `Root.cpk` from the supported game build. They run
+the CLI's default SVU01 profile and optional MMF01 profile in a temporary
+directory, check the expected RAB SHA-256, exact changed triangle counts
+(160/42), unchanged other model bytes and RAB entries, and rejection of
+modified/already-patched MDB input. Both profiles passed on 2026-10-01.
+They do not install files or establish in-game appearance.
+
+### Suggested headset checks
+
+Keep native game zoom off for the first comparison. Use the same mission and
+a distant building with recognizable edges. Record the active OpenXR runtime,
+resolution settings, weapon, and which eye is captured.
+
+| Check | Observation to record |
+|---|---|
+| Move the weapon into/out of view while keeping the head stationary | Compare the same building edge at a fixed camera pose, inside versus outside the aperture; the intended image displacement from the aperture center is 2x. |
+| View with each eye, then both eyes | Whether the scene is enlarged in both eyes and can be fused comfortably. |
+| Move the head sideways and change the eye-to-scope distance | Whether the projected aperture stays inside the housing; note when the size guards disable the overlay. |
+| Fire, reload, and switch weapon | Whether the effect follows the held scope and disappears for an unrelated model. |
+| Enable native game zoom separately | Its existing full-view zoom remains active; distinguish it from the local 2x effect. |
+| Compare a stable scene with the stock DLL | Record frame/GPU times under matching settings; no performance result is claimed by the synthetic tests. |
+
+`SCOPEMODEL` identifies a matching held resource. `SCOPEZOOM published` counts
+pose publications and `composited` counts submitted composite calls, normally
+for each eye. They do not measure visible magnification, image quality, or
+GPU completion. A nonzero count alone is not a headset validation result.
+
 Known limitations:
 
 - Fixed resource offsets (`model + 0xA0`, resource name at `+0x78`), an exact
@@ -107,8 +156,10 @@ Known limitations:
   and game build.
 - The ellipse is not depth-tested against the scope housing. Physical lens
   occlusion, eye relief, and optical parallax are not modeled.
-- The 2x effect is a resampling of an existing image, with its existing detail
-  and stereoscopic disparity. It is not a separate zoom camera.
+- The 2x effect resamples each existing eye image and cannot add source detail.
+  It also changes the apparent disparity relative to each projected aperture;
+  natural binocular alignment must be checked in the headset. It is not a
+  separate zoom camera.
 - Native game zoom still affects the whole view; there is no configuration
   toggle or automatic installation/restore workflow.
 - Other weapons, left-handed use, dual wielding, runtime differences, and the
